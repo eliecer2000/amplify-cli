@@ -12,6 +12,7 @@ import { askExecRolePermissionsQuestions } from './execPermissionsWalkthrough';
 import { scheduleWalkthrough } from './scheduleWalkthrough';
 import { merge } from '../utils/funcParamsUtils';
 import { topLevelCommentPrefix, topLevelCommentSuffix } from '../../../constants';
+import { forEach } from 'graphql-mapping-template';
 
 /**
  * Starting point for CLI walkthrough that generates a lambda function
@@ -89,14 +90,154 @@ export async function updateWalkthrough(context, lambdaToUpdate) {
     currentDefaults.categories = Object.keys(currentParameters.permissions);
     currentDefaults.categoryPermissionMap = currentParameters.permissions;
   }
-
+  if (!currentParameters.Parameters) {
+    currentParameters.Parameters = {};
+  }
+  if (!currentParameters.Environment) {
+    currentParameters.Environment = {};
+  }
+  if (await context.amplify.confirmPrompt.run('Do you want to modify the environment variables, given this Lambda function?')) {
+    const cfnFileName = `${resourceAnswer.resourceName}-cloudformation-template.json`;
+    const cfnFilePath = path.join(resourceDirPath, cfnFileName);
+    const cfnContent = context.amplify.readJsonFile(cfnFilePath);
+    let runWhile = true;
+    while (runWhile === true) {
+      const listVariables = Object.keys(cfnContent.Parameters);
+      let listOptions = [
+        {
+          name: 'Create a new variable',
+          value: 'create',
+        },
+      ];
+      if (listVariables.length > 0) {
+        listOptions = [
+          {
+            name: 'Create a new variable',
+            value: 'create',
+          },
+          {
+            name: 'Update a variable',
+            value: 'update',
+          },
+          {
+            name: 'Delete a variable',
+            value: 'delete',
+          },
+          {
+            name: 'List all variables',
+            value: 'list',
+          },
+        ];
+      }
+      const resourceQuestionVar = [
+        {
+          name: 'variableName',
+          message: 'Please select the option you want to run',
+          type: 'list',
+          choices: listOptions,
+        },
+      ];
+      const envVarAnswer = await inquirer.prompt(resourceQuestionVar);
+      switch (envVarAnswer.variableName) {
+        case 'list':
+          context.print.warning('');
+          context.print.warning('Variable List');
+          Object.keys(cfnContent.Parameters).forEach(key => {
+            context.print.warning('');
+            context.print.success(`${key}  =  ${cfnContent.Parameters[key].Default}`);
+          });
+          context.print.warning('');
+          break;
+        case 'create':
+          const envVarName = await inquirer.prompt({
+            type: 'input',
+            name: 'variableName',
+            message: 'Enter the variable name: ',
+            validate: context.amplify.inputValidation({
+              operator: 'regex',
+              value: '^[a-zA-Z0-9]+$',
+              onErrorMsg: 'Only the following characters will be accepted: a-z A-Z 0-9',
+              required: true,
+            }),
+            default: answers => answers.resourceName,
+          });
+          const envVarValue = await inquirer.prompt({
+            type: 'input',
+            name: 'variableValue',
+            message: 'Enter the value of the variable: ',
+            validate: context.amplify.inputValidation({
+              operator: 'regex',
+              value: '^[a-zA-Z0-9._-]+$',
+              onErrorMsg: 'Only the following characters will be accepted: a-z A-Z 0-9 _ . -',
+              required: true,
+            }),
+            default: answers => answers.resourceName,
+          });
+          cfnContent.Parameters[envVarName.variableName] = {
+            Type: 'String',
+            Default: envVarValue.variableValue,
+          };
+          cfnContent.Resources.LambdaFunction.Properties.Environment.Variables[envVarName.variableName] = { Ref: envVarName.variableName };
+          break;
+        case 'update':
+          const resourceQuestionVar = [
+            {
+              name: 'variableUpdate',
+              message: 'Select the variable you want to update ',
+              type: 'list',
+              choices: listVariables,
+            },
+          ];
+          const optionAnswer = await inquirer.prompt(resourceQuestionVar);
+          const envVarValueUpdate = await inquirer.prompt({
+            type: 'input',
+            name: 'variableValue',
+            message: 'Enter the new value of the variable: ',
+            validate: context.amplify.inputValidation({
+              operator: 'regex',
+              value: '^[a-zA-Z0-9._-]+$',
+              onErrorMsg: 'Only the following characters will be accepted: a-z A-Z 0-9 _ . -',
+              required: true,
+            }),
+            default: answers => answers.resourceName,
+          });
+          const x = { variableUpdate: '' };
+          Object.assign(x, { variableUpdate: optionAnswer.variableUpdate });
+          cfnContent.Parameters[x.variableUpdate] = {
+            Type: 'String',
+            Default: envVarValueUpdate.variableValue,
+          };
+          cfnContent.Resources.LambdaFunction.Properties.Environment.Variables[x.variableUpdate] = { Ref: x.variableUpdate };
+          context.print.success('Variable: ' + optionAnswer.variableUpdate + ' = ' + envVarValueUpdate.variableValue);
+          break;
+        case 'delete':
+          const resourceDeleteVar = [
+            {
+              name: 'variableDelete',
+              message: 'Select the variable you want to delete ',
+              type: 'list',
+              choices: listVariables,
+            },
+          ];
+          const optionAnswerDel = await inquirer.prompt(resourceDeleteVar);
+          const y = { variableDelete: '' };
+          Object.assign(y, { variableDelete: optionAnswerDel.variableDelete });
+          if (await context.amplify.confirmPrompt.run('Are you sure you want to delete the variable?: ' + y.variableDelete + '?')) {
+            delete cfnContent.Parameters[y.variableDelete];
+            delete cfnContent.Resources.LambdaFunction.Properties.Environment.Variables[y.variableDelete];
+            context.print.error('Variable deleted successfully');
+          }
+          break;
+      }
+      runWhile = await context.amplify.confirmPrompt.run('Do you want to change another one?');
+    }
+    fs.writeFileSync(cfnFilePath, JSON.stringify(cfnContent, null, 4));
+  }
   if (
     await context.amplify.confirmPrompt.run(
       'Do you want to update permissions granted to this Lambda function to perform on other resources in your project?',
     )
   ) {
-    // Get current dependsOn for the resource
-
     const amplifyMetaFilePath = context.amplify.pathManager.getAmplifyMetaFilePath();
     const amplifyMeta = context.amplify.readJsonFile(amplifyMetaFilePath);
     const resourceDependsOn = amplifyMeta.function[answers.resourceName].dependsOn || [];

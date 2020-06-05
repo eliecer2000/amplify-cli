@@ -65,7 +65,7 @@ async function getProjectName(context) {
       const projectNameQuestion = {
         type: 'input',
         name: 'inputProjectName',
-        message: 'Enter a name for the project',
+        message: 'Enter a name for the project.... ',
         default: projectName,
         validate: input => isProjectNameValid(input) || 'Project name should be between 3 and 20 characters and alphanumeric',
       };
